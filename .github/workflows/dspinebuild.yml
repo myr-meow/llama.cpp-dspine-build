@@ -21,6 +21,7 @@ jobs:
     env:
       BUILD_DIR: build
       ARTIFACT_NAME: llama-dspine-cuda-windows
+      CCACHE_DIR: ${{ github.workspace }}\.ccache
 
     steps:
       - name: Checkout repository
@@ -42,6 +43,34 @@ jobs:
           method: 'network'
           sub-packages: '["nvcc", "cudart", "cublas", "cublas_dev", "thrust", "visual_studio_integration"]'
 
+      - name: Install OpenSSL (Win64)
+        shell: pwsh
+        run: |
+          $url = "https://slproweb.com/download/Win64OpenSSL_Light-3_3_1.exe"
+          $out = "$env:RUNNER_TEMP\openssl.exe"
+          Invoke-WebRequest -Uri $url -OutFile $out
+          Start-Process -FilePath $out -ArgumentList "/SILENT", "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART" -Wait
+          echo "C:\Program Files\OpenSSL-Win64\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          echo "OPENSSL_ROOT_DIR=C:\Program Files\OpenSSL-Win64" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Install ccache (Windows)
+        shell: pwsh
+        run: |
+          choco install ccache -y
+          $ccachePath = (Get-Command ccache.exe).Source | Split-Path
+          echo $ccachePath | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Cache CMake build and ccache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.BUILD_DIR }}
+            ${{ env.CCACHE_DIR }}
+          key: ${{ runner.os }}-cuda-${{ hashFiles('**/CMakeLists.txt', '**/*.cmake', '**/ggml/**') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-cuda-${{ hashFiles('**/CMakeLists.txt', '**/*.cmake', '**/ggml/**') }}-
+            ${{ runner.os }}-cuda-
+
       - name: Verify toolchain
         shell: cmd
         run: |
@@ -51,10 +80,8 @@ jobs:
           cl 2>&1 | findstr /C:"Microsoft (R)"
           echo === cmake ===
           cmake --version
-          echo === ninja ===
-          ninja --version
-          echo === CUDA_PATH ===
-          echo %CUDA_PATH%
+          echo === ccache ===
+          ccache --version
 
       - name: Configure CMake (CUDA, Release)
         shell: cmd
@@ -64,10 +91,15 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release ^
             -DCMAKE_CUDA_COMPILER="%CUDA_PATH%\bin\nvcc.exe" ^
             -DCMAKE_CUDA_ARCHITECTURES="61;75;80;86;89" ^
-            -DLLAMA_CURL=OFF
+            -DLLAMA_CURL=OFF ^
+            -DGGML_CCACHE=ON
 
       - name: Build
         shell: cmd
+        env:
+          CCACHE_BASEDIR: ${{ github.workspace }}
+          CCACHE_NOHASHDIR: "true"
+          CCACHE_COMPILERCHECK: content
         run: |
           cmake --build %BUILD_DIR% --config Release -j %NUMBER_OF_PROCESSORS%
 
@@ -77,16 +109,12 @@ jobs:
           $dist = "dist"
           New-Item -ItemType Directory -Force -Path $dist | Out-Null
 
-          if (Test-Path "$env:BUILD_DIR\bin") {
-            Copy-Item -Recurse -Path "$env:BUILD_DIR\bin\*" -Destination $dist
+          Get-ChildItem -Path "$env:BUILD_DIR" -Recurse -Include *.exe, *.dll | ForEach-Object {
+            Copy-Item $_.FullName -Destination $dist -Force
           }
 
           if ($env:CUDA_PATH) {
-            $patterns = @(
-              "cudart64_*.dll",
-              "cublas64_*.dll",
-              "cublasLt64_*.dll"
-            )
+            $patterns = @("cudart64_*.dll", "cublas64_*.dll", "cublasLt64_*.dll")
             foreach ($p in $patterns) {
               Get-ChildItem -Path "$env:CUDA_PATH\bin" -Filter $p -ErrorAction SilentlyContinue |
                 ForEach-Object { Copy-Item $_.FullName -Destination $dist -Force }
