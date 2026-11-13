@@ -1,0 +1,108 @@
+name: Build DSpine (llama.cpp fork, CUDA, Windows)
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - dspine
+  pull_request:
+    branches:
+      - dspine
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows-cuda:
+    name: Windows x64 / CUDA / Release
+    runs-on: windows-2022
+    timeout-minutes: 240
+
+    env:
+      BUILD_DIR: build
+      ARTIFACT_NAME: llama-dspine-cuda-windows
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Setup MSVC (Visual Studio 2022, x64)
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Verify toolchain
+        shell: cmd
+        run: |
+          echo === nvcc ===
+          nvcc --version
+          echo === cl ===
+          cl 2>&1 | findstr /C:"Microsoft (R)"
+          echo === cmake ===
+          cmake --version
+          echo === ninja ===
+          ninja --version
+
+      - name: Configure CMake (CUDA, Release)
+        shell: cmd
+        run: |
+          cmake -B %BUILD_DIR% -G Ninja ^
+            -DGGML_CUDA=ON ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DCMAKE_CUDA_ARCHITECTURES="61;75;80;86;89" ^
+            -DLLAMA_CURL=OFF
+
+      - name: Build
+        shell: cmd
+        run: |
+          cmake --build %BUILD_DIR% --config Release -j %NUMBER_OF_PROCESSORS%
+
+      - name: Stage artifacts
+        shell: pwsh
+        run: |
+          $dist = "dist"
+          New-Item -ItemType Directory -Force -Path $dist | Out-Null
+
+          if (Test-Path "$env:BUILD_DIR\bin") {
+            Copy-Item -Recurse -Path "$env:BUILD_DIR\bin\*" -Destination $dist
+          }
+
+          if ($env:CUDA_PATH) {
+            $patterns = @(
+              "cudart64_*.dll",
+              "cublas64_*.dll",
+              "cublasLt64_*.dll"
+            )
+            foreach ($p in $patterns) {
+              Get-ChildItem -Path "$env:CUDA_PATH\bin" -Filter $p -ErrorAction SilentlyContinue |
+                ForEach-Object { Copy-Item $_.FullName -Destination $dist -Force }
+            }
+          }
+
+          $msvcRedist = "${env:VCToolsRedistDir}..\..\..\Redist\MSVC"
+          if (Test-Path $msvcRedist) {
+            Get-ChildItem -Path $msvcRedist -Recurse -Filter "vcruntime140*.dll" -ErrorAction SilentlyContinue |
+              Select-Object -First 2 | ForEach-Object { Copy-Item $_.FullName -Destination $dist -Force }
+            Get-ChildItem -Path $msvcRedist -Recurse -Filter "msvcp140*.dll" -ErrorAction SilentlyContinue |
+              Select-Object -First 2 | ForEach-Object { Copy-Item $_.FullName -Destination $dist -Force }
+          }
+          
+          @(
+            "Commit: $env:GITHUB_SHA"
+            "Ref: $env:GITHUB_REF"
+            "Run: $env:GITHUB_RUN_ID"
+            "Date(UTC): $((Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss'))"
+          ) | Set-Content -Path "$dist\BUILD_INFO.txt" -Encoding UTF8
+
+          Compress-Archive -Path "$dist\*" -DestinationPath "$env:ARTIFACT_NAME.zip" -Force
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: llama-dspine-cuda-windows
+          path: llama-dspine-cuda-windows.zip
+          retention-days: 30
+          if-no-files-found: error
