@@ -46,12 +46,9 @@ jobs:
       - name: Install OpenSSL (Win64)
         shell: pwsh
         run: |
-          $url = "https://slproweb.com/download/Win64OpenSSL_Light-3_3_1.exe"
-          $out = "$env:RUNNER_TEMP\openssl.exe"
-          Invoke-WebRequest -Uri $url -OutFile $out
-          Start-Process -FilePath $out -ArgumentList "/SILENT", "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART" -Wait
-          echo "C:\Program Files\OpenSSL-Win64\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          echo "OPENSSL_ROOT_DIR=C:\Program Files\OpenSSL-Win64" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          choco install openssl --no-progress -y
+          echo "C:\Program Files\OpenSSL\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          echo "OPENSSL_ROOT_DIR=C:\Program Files\OpenSSL" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Install ccache (Windows)
         shell: pwsh
