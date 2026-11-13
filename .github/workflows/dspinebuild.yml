@@ -106,7 +106,7 @@ jobs:
           $dist = "dist"
           New-Item -ItemType Directory -Force -Path $dist | Out-Null
 
-          Get-ChildItem -Path "$env:BUILD_DIR" -Recurse -Include *.exe, *.dll | ForEach-Object {
+          Get-ChildItem -Path "$env:BUILD_DIR" -Recurse -File | Where-Object { $_.Extension -in ".exe", ".dll" } | ForEach-Object {
             Copy-Item $_.FullName -Destination $dist -Force
           }
 
@@ -116,6 +116,10 @@ jobs:
               Get-ChildItem -Path "$env:CUDA_PATH\bin" -Filter $p -ErrorAction SilentlyContinue |
                 ForEach-Object { Copy-Item $_.FullName -Destination $dist -Force }
             }
+          }
+
+          if (Test-Path "C:\Program Files\OpenSSL\bin") {
+            Copy-Item "C:\Program Files\OpenSSL\bin\*.dll" -Destination $dist -Force
           }
 
           $msvcRedist = "${env:VCToolsRedistDir}..\..\..\Redist\MSVC"
@@ -134,7 +138,7 @@ jobs:
           ) | Set-Content -Path "$dist\BUILD_INFO.txt" -Encoding UTF8
 
           Compress-Archive -Path "$dist\*" -DestinationPath "$env:ARTIFACT_NAME.zip" -Force
-
+          
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
